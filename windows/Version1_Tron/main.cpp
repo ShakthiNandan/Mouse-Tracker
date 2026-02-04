@@ -187,7 +187,10 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     ShowWindow(hTrail, SW_SHOWMAXIMIZED);
                 }
             } else {
-                MessageBox(hwnd, L"No points to draw.", L"Info", MB_OK);
+                // Only show error if the user *wanted* to see the result
+                if (SendMessage(hResultCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                    MessageBox(hwnd, L"No points to draw.", L"Info", MB_OK);
+                }
             }
         }
         else if (LOWORD(wParam) == 6) { // PLAY TRON
@@ -278,20 +281,64 @@ LRESULT CALLBACK LiveOverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            Graphics graphics(hdc);
-            graphics.Clear(Color(255, 0, 0, 0)); // Clear frame for transparent background
+
+            // Double buffering to eliminate flicker and stutter
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            HDC hdcMem = CreateCompatibleDC(hdc);
+            HBITMAP hbmMem = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+            HGDIOBJ oldBm = SelectObject(hdcMem, hbmMem);
+
+            Graphics graphics(hdcMem);
+            graphics.Clear(Color(255, 0, 0, 0)); // Black background for transparency key
             graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+
             if (g_livePoints.size() > 1) {
+                // Optimization: Copy checks to vector once
+                std::vector<Point> pts;
+                pts.reserve(g_livePoints.size());
+                for (const auto& p : g_livePoints) {
+                    pts.emplace_back((INT)p.x, (INT)p.y);
+                }
+
+                int totalPts = (int)pts.size();
+                // Draw in "bands" of alpha to reduce Draw calls from N to ~20
+                int steps = 30; 
+                if (steps > totalPts) steps = totalPts / 2;
+                if (steps < 1) steps = 1;
+                
+                int ptsPerStep = totalPts / steps;
+                
                 int r = GetRValue(g_penColor);
                 int g = GetGValue(g_penColor);
                 int b = GetBValue(g_penColor);
-                for (size_t i = 0; i < g_livePoints.size() - 1; ++i) {
-                    int alpha = (int)((double)i / (double)g_livePoints.size() * 255.0);
-                    if (alpha < 10) alpha = 10; 
+
+                for (int i = 0; i < steps; ++i) {
+                    int startIdx = i * ptsPerStep;
+                    // Ensure overlap to connect lines seamlessly
+                    int endIdx = (i == steps - 1) ? totalPts : (startIdx + ptsPerStep + 1);
+                    if (endIdx > totalPts) endIdx = totalPts;
+                    
+                    int count = endIdx - startIdx;
+                    if (count < 2) continue;
+
+                    // Calculate Alpha for this band
+                    double ratio = (double)i / (double)steps;
+                    int alpha = (int)(ratio * 255.0);
+                    if (alpha < 20) alpha = 20; // Min visibility
+
                     Pen pen(Color(alpha, r, g, b), (REAL)g_penWidth);
-                    graphics.DrawLine(&pen, (INT)g_livePoints[i].x, (INT)g_livePoints[i].y, (INT)g_livePoints[i+1].x, (INT)g_livePoints[i+1].y);
+                    graphics.DrawLines(&pen, &pts[startIdx], count);
                 }
             }
+
+            // Blit to screen
+            BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
+            
+            SelectObject(hdcMem, oldBm);
+            DeleteObject(hbmMem);
+            DeleteDC(hdcMem);
+
             EndPaint(hwnd, &ps);
         }
         break;
