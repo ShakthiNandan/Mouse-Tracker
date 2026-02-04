@@ -56,6 +56,9 @@ private:
     int m_speed;
     GameState m_state;
     std::vector<Bike> m_bikes;
+    // Optimization: 2D Grid for O(1) collision queries. Encoded as 1D vector (row-major).
+    // Stores the Bike Index (0 to N-1). -1 means empty.
+    std::vector<int> m_collisionGrid;
 };
 
 #endif

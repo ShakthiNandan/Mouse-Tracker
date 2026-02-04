@@ -24,6 +24,7 @@ const wchar_t SETTINGS_FILENAME[] = L"settings.ini";
 
 std::vector<POINT> g_trailPoints;
 std::deque<POINT> g_livePoints;
+std::vector<POINT> g_sessionHistory; // Optimization: Memory buffer instead of file
 ULONG_PTR gdiplusToken;
 TronGame g_tronGame;
 
@@ -132,32 +133,30 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
     case WM_COMMAND:
         if (LOWORD(wParam) == 1) { // START
-            const wchar_t* mode = g_autoClear ? L"w" : L"a";
-            logFile = _wfopen(LOG_FILENAME, mode);
-            if (logFile != NULL) {
-                isTracking = TRUE;
-                g_livePoints.clear();
-                if (SendMessage(hLiveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-                    hLiveOverlay = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, LIVE_OVERLAY_CLASS_NAME, L"LiveTrail", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
-                    SetLayeredWindowAttributes(hLiveOverlay, RGB(0,0,0), 0, LWA_COLORKEY);
-                }
-                SetTimer(hwnd, 1, g_interval, NULL); 
-                EnableWindow(hStartBtn, FALSE);
-                EnableWindow(hLiveCheck, FALSE); 
-                EnableWindow(hResultCheck, FALSE);
-                EnableWindow(hAutoSaveCheck, FALSE);
-                EnableWindow(hTronBtn, FALSE);
-                EnableWindow(hStopBtn, TRUE);
-            } else {
-                MessageBox(hwnd, L"Failed to open log file.", L"Error", MB_OK | MB_ICONERROR);
+            isTracking = TRUE;
+            g_livePoints.clear();
+            g_sessionHistory.clear(); 
+            
+            // Re-read settings just in case
+            LoadSettings(); 
+            
+            if (SendMessage(hLiveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                hLiveOverlay = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, LIVE_OVERLAY_CLASS_NAME, L"LiveTrail", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
+                SetLayeredWindowAttributes(hLiveOverlay, RGB(0,0,0), 0, LWA_COLORKEY);
             }
+            SetTimer(hwnd, 1, g_interval, NULL); 
+            EnableWindow(hStartBtn, FALSE);
+            EnableWindow(hLiveCheck, FALSE); 
+            EnableWindow(hResultCheck, FALSE); // Allow toggling? No, safer to lock.
+            EnableWindow(hAutoSaveCheck, FALSE);
+            EnableWindow(hTronBtn, FALSE);
+            EnableWindow(hStopBtn, TRUE);
         }
         else if (LOWORD(wParam) == 2) { // STOP
             KillTimer(hwnd, 1);
             isTracking = FALSE;
             
             if (hLiveOverlay) { DestroyWindow(hLiveOverlay); hLiveOverlay = NULL; }
-            if (logFile) { fclose(logFile); logFile = NULL; }
 
             EnableWindow(hStartBtn, TRUE);
             EnableWindow(hLiveCheck, TRUE);
@@ -166,7 +165,8 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             EnableWindow(hTronBtn, TRUE);
             EnableWindow(hStopBtn, FALSE);
 
-            LoadPointsFromFile();
+            // Copy session history to result trail if we want to show it
+            g_trailPoints = g_sessionHistory; // Transfer ownership/copy
             
             if (SendMessage(hAutoSaveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED && !g_trailPoints.empty()) {
                 HWND hTrail = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED, TRAIL_CLASS_NAME, L"Mouse Trail", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
@@ -203,11 +203,15 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_TIMER:
-        if (wParam == 1 && isTracking && logFile) {
+        if (wParam == 1 && isTracking) {
             POINT p;
             if (GetCursorPos(&p)) {
-                fprintf(logFile, "%d,%d\n", p.x, p.y);
-                fflush(logFile); 
+                // Optimization: ONLY store history if the user actually wants the Result Trail
+                // The user said: "don't keep the entire history if the show trail is not enabled"
+                if (SendMessage(hResultCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                    g_sessionHistory.push_back(p);
+                }
+
                 if (hLiveOverlay) {
                     g_livePoints.push_back(p);
                     if (g_livePoints.size() > (size_t)g_trailLength) g_livePoints.pop_front();
@@ -330,9 +334,8 @@ LRESULT CALLBACK GameOverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                 if (b.trail.size() > 1) {
                     Pen pen(penColor, 3.0f);
-                    for (size_t i = 1; i < b.trail.size(); ++i) {
-                         g.DrawLine(&pen, (INT)b.trail[i-1].x, (INT)b.trail[i-1].y, (INT)b.trail[i].x, (INT)b.trail[i].y);
-                    }
+                    // Optimization: Draw entire trail as one polyline
+                    g.DrawLines(&pen, reinterpret_cast<const Point*>(b.trail.data()), (INT)b.trail.size());
                 }
 
                 // Only draw head if alive

@@ -11,11 +11,14 @@ TronGame::~TronGame() {}
 void TronGame::Init(int screenW, int screenH) {
     m_screenW = screenW;
     m_screenH = screenH;
+    m_collisionGrid.resize(m_screenW * m_screenH);
 }
 
 void TronGame::StartGame(int aiCount) {
     m_bikes.clear();
     m_state = GAME_RUNNING;
+    // Reset Grid
+    std::fill(m_collisionGrid.begin(), m_collisionGrid.end(), -1);
 
     // 1. Add Player Bike (Starts at mouse pos)
     POINT p;
@@ -24,7 +27,7 @@ void TronGame::StartGame(int aiCount) {
     player.x = (float)p.x;
     player.y = (float)p.y;
     player.lastPos = p;
-    player.dir = RIGHT; // Default, but controllable
+    player.dir = RIGHT; 
     player.state = ALIVE;
     player.isPlayer = true;
     player.color = RGB(0, 255, 255); // Cyan
@@ -40,10 +43,17 @@ void TronGame::StartGame(int aiCount) {
         b.dir = (Direction)(rand() % 4);
         b.state = ALIVE;
         b.isPlayer = false;
-        // Random intense colors (Avoid black/dark)
         b.color = RGB(100 + rand() % 155, 100 + rand() % 155, 100 + rand() % 155);
         b.trail.push_back(b.lastPos);
         m_bikes.push_back(b);
+    }
+    
+    // Mark initial positions on grid
+    for(size_t i=0; i<m_bikes.size(); ++i) {
+        int idx = (int)m_bikes[i].x + (int)m_bikes[i].y * m_screenW;
+        if(idx >= 0 && idx < (int)m_collisionGrid.size()) {
+            m_collisionGrid[idx] = (int)i;
+        }
     }
 }
 
@@ -52,9 +62,13 @@ void TronGame::Update() {
 
     bool anyAiAlive = false;
 
-    for (auto& b : m_bikes) {
+    for (size_t i = 0; i < m_bikes.size(); ++i) {
+        Bike& b = m_bikes[i];
         if (b.state == DEAD) continue;
         if (!b.isPlayer) anyAiAlive = true;
+
+        float oldX = b.x;
+        float oldY = b.y;
 
         if (b.isPlayer) {
             UpdatePlayerBike(b);
@@ -62,32 +76,67 @@ void TronGame::Update() {
             UpdateAIBike(b);
         }
 
-        // Add trail point if moved enough (optimization)
+        // Trace movement on Grid (Bresenham-like or simple stepping)
+        // We walk from (oldX, oldY) to (b.x, b.y)
+        int x0 = (int)oldX;
+        int y0 = (int)oldY;
+        int x1 = (int)b.x;
+        int y1 = (int)b.y;
+
+        int dx = abs(x1 - x0);
+        int dy = abs(y1 - y0);
+        int sx = (x0 < x1) ? 1 : -1;
+        int sy = (y0 < y1) ? 1 : -1;
+        int err = dx - dy;
+
+        while (true) {
+            // Check Collision (Skip start point to avoid self-collision immediately if desired, 
+            // but usually safe as start point is 'owned' by us from previous frame)
+            // However, if we just marked it, it returns our ID.
+            
+            int gridIdx = x0 + y0 * m_screenW;
+            if (gridIdx >= 0 && gridIdx < (int)m_collisionGrid.size()) {
+                 int curId = m_collisionGrid[gridIdx];
+                 if (curId != -1 && curId != (int)i) {
+                     // Hit something!
+                     // Check if that something is ALIVE
+                     if (m_bikes[curId].state == ALIVE) {
+                         b.state = DEAD;
+                         if (b.isPlayer) m_state = GAME_OVER;
+                         break; // Stop tracing
+                     }
+                     // If DEAD, it's a ghost trail, ignore.
+                 }
+                 // Mark it
+                 m_collisionGrid[gridIdx] = (int)i;
+            } else {
+                // Out of bounds - Kill? Or clamp? 
+                // AI logic clamps, so we shouldn't be here. Player might be.
+                if (b.isPlayer) { // Player went off screen
+                     b.state = DEAD; m_state = GAME_OVER; break;
+                }
+            }
+
+            if (x0 == x1 && y0 == y1) break;
+            int e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 < dx) { err += dx; y0 += sy; }
+        }
+
+        // Add trail point if moved enough (rendering optimization)
         POINT curr = { (long)b.x, (long)b.y };
-        float dx = b.x - b.lastPos.x;
-        float dy = b.y - b.lastPos.y;
-        if (dx*dx + dy*dy > 4) { // Only add if moved > 2 pixels
+        float dxx = b.x - b.lastPos.x;
+        float dyy = b.y - b.lastPos.y;
+        if (dxx*dxx + dyy*dyy > 4) { 
             b.trail.push_back(curr);
             b.lastPos = curr;
         }
     }
 
-    CheckCollisions();
-
-    // Check Win/Loss conditions
-    if (!anyAiAlive) {
-        // Player wins? Or infinite mode? keeping running for now
-    }
+    // Check Win/Loss conditions - keeping simple
 }
 
 void TronGame::UpdatePlayerBike(Bike& b) {
-    // Player controls direction, but movement is automatic constant speed (Tron style)
-    // OR: We can follow the mouse cursor directly?
-    // User requested: "Cursor player -> treated like a bike"
-    // To match "Tron", constant automatic movement is better.
-    // BUT to match "Mouse Tracker", maybe we just use Cursor Position directly?
-    // Let's stick to CURSOR POSITION directly as the user implies "GetCursorPos -> bike".
-    
     POINT p;
     GetCursorPos(&p);
     
@@ -129,67 +178,14 @@ void TronGame::UpdateAIBike(Bike& b) {
     }
 }
 
-// Simple point-to-segment distance check
-bool PointNearSegment(POINT p, POINT s1, POINT s2, int threshold = 5) {
-    // vertical segment
-    if (abs(s1.x - s2.x) < threshold) { 
-        if (abs(p.x - s1.x) < threshold) {
-            long minY = std::min(s1.y, s2.y) - threshold;
-            long maxY = std::max(s1.y, s2.y) + threshold;
-            if (p.y >= minY && p.y <= maxY) return true;
-        }
-    }
-    // horizontal segment
-    else if (abs(s1.y - s2.y) < threshold) {
-        if (abs(p.y - s1.y) < threshold) {
-            long minX = std::min(s1.x, s2.x) - threshold;
-            long maxX = std::max(s1.x, s2.x) + threshold;
-            if (p.x >= minX && p.x <= maxX) return true;
-        }
-    }
-    // diagonal or general (simplified rect check)
-    else {
-        // Just checking bounding box for speed
-        long minX = std::min(s1.x, s2.x) - threshold;
-        long maxX = std::max(s1.x, s2.x) + threshold;
-        long minY = std::min(s1.y, s2.y) - threshold;
-        long maxY = std::max(s1.y, s2.y) + threshold;
-        if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) return true;
-    }
-    return false;
+// Deprecated O(N^2) check
+void TronGame::CheckCollisions() {
+    // Logic moved to Update for efficiency
 }
 
-void TronGame::CheckCollisions() {
-    for (size_t i = 0; i < m_bikes.size(); i++) {
-        if (m_bikes[i].state == DEAD) continue;
-
-        POINT head = { (long)m_bikes[i].x, (long)m_bikes[i].y };
-
-        // Check against ALL trails (including self, but ignore recent points)
-        for (size_t j = 0; j < m_bikes.size(); j++) {
-            if (m_bikes[j].state == DEAD) continue; // Dead trails don't kill (user requirement)
-
-            const auto& trail = m_bikes[j].trail;
-            
-            // Check segments
-            // Skip the very last few points of own trail to avoid self-collision immediately
-            size_t k_end = trail.size();
-            if (i == j && k_end > 5) k_end -= 5; 
-            else if (i == j) k_end = 0; // Trail too short to hit self
-
-            if (trail.size() < 2) continue;
-
-            for (size_t k = 1; k < k_end; k++) {
-                if (PointNearSegment(head, trail[k-1], trail[k])) {
-                    m_bikes[i].state = DEAD;
-                    if (m_bikes[i].isPlayer) {
-                        // MessageBox handled in main loop or just flag state
-                        m_state = GAME_OVER;
-                    }
-                }
-            }
-        }
-    }
+// Helper NOT strictly needed anymore but left for compatibility
+bool PointNearSegment(POINT p, POINT s1, POINT s2, int threshold = 5) {
+     return false; 
 }
 
 void TronGame::HandleInput(int key) {
