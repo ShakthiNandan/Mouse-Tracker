@@ -275,6 +275,7 @@ LRESULT CALLBACK LiveOverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             Graphics graphics(hdc);
+            graphics.Clear(Color(255, 0, 0, 0)); // Clear frame for transparent background
             graphics.SetSmoothingMode(SmoothingModeAntiAlias);
             if (g_livePoints.size() > 1) {
                 int r = GetRValue(g_penColor);

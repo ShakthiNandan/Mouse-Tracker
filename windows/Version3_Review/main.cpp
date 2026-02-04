@@ -7,7 +7,6 @@
 #include <vector>
 #include <deque>
 #include <gdiplus.h>
-#include "tron_game.h"
 
 using namespace Gdiplus;
 #pragma comment (lib,"gdiplus.lib")
@@ -18,14 +17,10 @@ FILE* logFile = NULL;
 const wchar_t LOG_FILENAME[] = L"mouse_log.txt";
 const wchar_t CONTROL_CLASS_NAME[] = L"ControlWindowClass";
 const wchar_t TRAIL_CLASS_NAME[] = L"TrailWindowClass";
-const wchar_t LIVE_OVERLAY_CLASS_NAME[] = L"LiveOverlayClass";
-const wchar_t GAME_OVERLAY_CLASS_NAME[] = L"GameOverlayClass";
 const wchar_t SETTINGS_FILENAME[] = L"settings.ini";
 
 std::vector<POINT> g_trailPoints;
-std::deque<POINT> g_livePoints;
 ULONG_PTR gdiplusToken;
-TronGame g_tronGame;
 
 // Settings
 int g_interval = 50;      
@@ -33,23 +28,16 @@ int g_penWidth = 2;
 COLORREF g_penColor = RGB(0, 255, 0); 
 BOOL g_autoClear = TRUE; 
 int g_trailLength = 20;
-int g_tronAiCount = 3; 
 
 // Initial Interface States
-BOOL g_showLive = FALSE;
-BOOL g_showResult = TRUE;
 BOOL g_autoSave = FALSE;
 
 // UI Handles
-HWND hStartBtn, hStopBtn, hLiveCheck, hResultCheck, hAutoSaveCheck, hTronBtn;
-HWND hLiveOverlay = NULL;
-HWND hGameOverlay = NULL;
+HWND hStartBtn, hStopBtn, hAutoSaveCheck;
 
 // Forward declarations
 LRESULT CALLBACK ControlProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK TrailProc(HWND, UINT, WPARAM, LPARAM);
-LRESULT CALLBACK LiveOverlayProc(HWND, UINT, WPARAM, LPARAM);
-LRESULT CALLBACK GameOverlayProc(HWND, UINT, WPARAM, LPARAM);
 void LoadPointsFromFile();
 void LoadSettings();
 int GetEncoderClsid(const WCHAR* format, CLSID* pClsid);
@@ -75,28 +63,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine,
     wcTrail.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClass(&wcTrail);
 
-    WNDCLASS wcLive = {0};
-    wcLive.lpfnWndProc = LiveOverlayProc;
-    wcLive.hInstance = hInstance;
-    wcLive.lpszClassName = LIVE_OVERLAY_CLASS_NAME;
-    wcLive.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wcLive.hCursor = LoadCursor(NULL, IDC_ARROW);
-    RegisterClass(&wcLive);
-
-    WNDCLASS wcGame = {0};
-    wcGame.lpfnWndProc = GameOverlayProc;
-    wcGame.hInstance = hInstance;
-    wcGame.lpszClassName = GAME_OVERLAY_CLASS_NAME;
-    wcGame.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wcGame.hCursor = LoadCursor(NULL, IDC_ARROW);
-    RegisterClass(&wcGame);
-
     LoadSettings();
-    g_tronGame.Init(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
 
     wchar_t title[64];
     wsprintf(title, L"Tracker (Interval: %dms)", g_interval);
-    HWND hwnd = CreateWindowEx(0, CONTROL_CLASS_NAME, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT, 250, 260, NULL, NULL, hInstance, NULL);
+    HWND hwnd = CreateWindowEx(0, CONTROL_CLASS_NAME, title, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT, 250, 160, NULL, NULL, hInstance, NULL);
 
     if (hwnd == NULL) return 0;
     ShowWindow(hwnd, nCmdShow);
@@ -118,16 +89,8 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         hStopBtn = CreateWindow(L"BUTTON", L"STOP", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 120, 10, 100, 60, hwnd, (HMENU)2, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
         EnableWindow(hStopBtn, FALSE);
 
-        hLiveCheck = CreateWindow(L"BUTTON", L"Show Live Fading Trail", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 15, 80, 200, 30, hwnd, (HMENU)3, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-        if (g_showLive) SendMessage(hLiveCheck, BM_SETCHECK, BST_CHECKED, 0);
-
-        hResultCheck = CreateWindow(L"BUTTON", L"Show Result Trail", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 15, 110, 200, 30, hwnd, (HMENU)4, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
-        if (g_showResult) SendMessage(hResultCheck, BM_SETCHECK, BST_CHECKED, 0);
-
-        hAutoSaveCheck = CreateWindow(L"BUTTON", L"Auto-Save on Stop", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 15, 140, 200, 30, hwnd, (HMENU)5, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
+        hAutoSaveCheck = CreateWindow(L"BUTTON", L"Auto-Save on Stop", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 15, 80, 200, 30, hwnd, (HMENU)5, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
         if (g_autoSave) SendMessage(hAutoSaveCheck, BM_SETCHECK, BST_CHECKED, 0);
-
-        hTronBtn = CreateWindow(L"BUTTON", L"PLAY TRON MODE", WS_TABSTOP | WS_VISIBLE | WS_CHILD, 10, 180, 210, 30, hwnd, (HMENU)6, ((LPCREATESTRUCT)lParam)->hInstance, NULL);
         break;
 
     case WM_COMMAND:
@@ -136,17 +99,9 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             logFile = _wfopen(LOG_FILENAME, mode);
             if (logFile != NULL) {
                 isTracking = TRUE;
-                g_livePoints.clear();
-                if (SendMessage(hLiveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-                    hLiveOverlay = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, LIVE_OVERLAY_CLASS_NAME, L"LiveTrail", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
-                    SetLayeredWindowAttributes(hLiveOverlay, RGB(0,0,0), 0, LWA_COLORKEY);
-                }
                 SetTimer(hwnd, 1, g_interval, NULL); 
                 EnableWindow(hStartBtn, FALSE);
-                EnableWindow(hLiveCheck, FALSE); 
-                EnableWindow(hResultCheck, FALSE);
                 EnableWindow(hAutoSaveCheck, FALSE);
-                EnableWindow(hTronBtn, FALSE);
                 EnableWindow(hStopBtn, TRUE);
             } else {
                 MessageBox(hwnd, L"Failed to open log file.", L"Error", MB_OK | MB_ICONERROR);
@@ -156,14 +111,10 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             KillTimer(hwnd, 1);
             isTracking = FALSE;
             
-            if (hLiveOverlay) { DestroyWindow(hLiveOverlay); hLiveOverlay = NULL; }
             if (logFile) { fclose(logFile); logFile = NULL; }
 
             EnableWindow(hStartBtn, TRUE);
-            EnableWindow(hLiveCheck, TRUE);
-            EnableWindow(hResultCheck, TRUE);
             EnableWindow(hAutoSaveCheck, TRUE);
-            EnableWindow(hTronBtn, TRUE);
             EnableWindow(hStopBtn, FALSE);
 
             LoadPointsFromFile();
@@ -181,23 +132,12 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
 
             if (!g_trailPoints.empty()) {
-                if (SendMessage(hResultCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
-                    HWND hTrail = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED, TRAIL_CLASS_NAME, L"Mouse Trail", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
-                    SetLayeredWindowAttributes(hTrail, RGB(0,0,0), 0, LWA_COLORKEY);
-                    ShowWindow(hTrail, SW_SHOWMAXIMIZED);
-                }
+                // ALWAYS SHOW RESULT
+                HWND hTrail = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED, TRAIL_CLASS_NAME, L"Mouse Trail", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
+                SetLayeredWindowAttributes(hTrail, RGB(0,0,0), 0, LWA_COLORKEY);
+                ShowWindow(hTrail, SW_SHOWMAXIMIZED);
             } else {
                 MessageBox(hwnd, L"No points to draw.", L"Info", MB_OK);
-            }
-        }
-        else if (LOWORD(wParam) == 6) { // PLAY TRON
-            if (hGameOverlay == NULL) {
-                hGameOverlay = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, GAME_OVERLAY_CLASS_NAME, L"TronOverlay", WS_POPUP | WS_VISIBLE | WS_MAXIMIZE, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), NULL, NULL, GetModuleHandle(NULL), NULL);
-                SetLayeredWindowAttributes(hGameOverlay, RGB(0,0,0), 0, LWA_COLORKEY);
-                g_tronGame.StartGame(g_tronAiCount);
-                SetTimer(hwnd, 2, 16, NULL); 
-                EnableWindow(hStartBtn, FALSE);
-                EnableWindow(hTronBtn, FALSE);
             }
         }
         break;
@@ -208,22 +148,6 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (GetCursorPos(&p)) {
                 fprintf(logFile, "%d,%d\n", p.x, p.y);
                 fflush(logFile); 
-                if (hLiveOverlay) {
-                    g_livePoints.push_back(p);
-                    if (g_livePoints.size() > (size_t)g_trailLength) g_livePoints.pop_front();
-                    InvalidateRect(hLiveOverlay, NULL, TRUE);
-                }
-            }
-        }
-        else if (wParam == 2 && hGameOverlay) {
-            g_tronGame.Update();
-            InvalidateRect(hGameOverlay, NULL, FALSE);
-            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-                 KillTimer(hwnd, 2);
-                 DestroyWindow(hGameOverlay);
-                 hGameOverlay = NULL;
-                 EnableWindow(hStartBtn, TRUE);
-                 EnableWindow(hTronBtn, TRUE);
             }
         }
         break;
@@ -268,92 +192,6 @@ LRESULT CALLBACK TrailProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-LRESULT CALLBACK LiveOverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    switch (uMsg) {
-    case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            Graphics graphics(hdc);
-            graphics.SetSmoothingMode(SmoothingModeAntiAlias);
-            if (g_livePoints.size() > 1) {
-                int r = GetRValue(g_penColor);
-                int g = GetGValue(g_penColor);
-                int b = GetBValue(g_penColor);
-                for (size_t i = 0; i < g_livePoints.size() - 1; ++i) {
-                    int alpha = (int)((double)i / (double)g_livePoints.size() * 255.0);
-                    if (alpha < 10) alpha = 10; 
-                    Pen pen(Color(alpha, r, g, b), (REAL)g_penWidth);
-                    graphics.DrawLine(&pen, (INT)g_livePoints[i].x, (INT)g_livePoints[i].y, (INT)g_livePoints[i+1].x, (INT)g_livePoints[i+1].y);
-                }
-            }
-            EndPaint(hwnd, &ps);
-        }
-        break;
-    case WM_ERASEBKGND:
-        return 1; 
-    }
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
-}
-
-LRESULT CALLBACK GameOverlayProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    switch (uMsg) {
-    case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            
-            // Double buffer
-            HDC hdcMem = CreateCompatibleDC(hdc);
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            HBITMAP hbm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
-            HGDIOBJ oldBm = SelectObject(hdcMem, hbm);
-
-            HBRUSH hBr = CreateSolidBrush(RGB(0,0,0));
-            FillRect(hdcMem, &rc, hBr);
-            DeleteObject(hBr);
-
-            Graphics g(hdcMem);
-            g.SetSmoothingMode(SmoothingModeAntiAlias);
-
-            const auto& bikes = g_tronGame.GetBikes();
-            for (const auto& b : bikes) {
-                // Determine Color
-                Color penColor;
-                if (b.state == DEAD) {
-                    penColor = Color(255, 60, 60, 60); // Gray for dead trails
-                } else {
-                    penColor = Color(255, GetRValue(b.color), GetGValue(b.color), GetBValue(b.color));
-                }
-
-                if (b.trail.size() > 1) {
-                    Pen pen(penColor, 3.0f);
-                    for (size_t i = 1; i < b.trail.size(); ++i) {
-                         g.DrawLine(&pen, (INT)b.trail[i-1].x, (INT)b.trail[i-1].y, (INT)b.trail[i].x, (INT)b.trail[i].y);
-                    }
-                }
-
-                // Only draw head if alive
-                if (b.state == ALIVE) {
-                    SolidBrush brush(Color(255, 255, 255, 255));
-                    g.FillRectangle(&brush, (INT)b.x - 3, (INT)b.y - 3, 6, 6);
-                }
-            }
-            
-            BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
-            SelectObject(hdcMem, oldBm);
-            DeleteObject(hbm);
-            DeleteDC(hdcMem);
-            EndPaint(hwnd, &ps);
-        }
-        break;
-    case WM_ERASEBKGND:
-        return 1; 
-    }
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
-}
-
 void LoadPointsFromFile() {
     g_trailPoints.clear();
     FILE* f = _wfopen(LOG_FILENAME, L"r");
@@ -384,12 +222,7 @@ void LoadSettings() {
     g_penColor = RGB(r, g, b);
     g_autoClear = GetPrivateProfileInt(L"Settings", L"AutoClear", 1, path);
     g_trailLength = GetPrivateProfileInt(L"Settings", L"TrailLength", 20, path);
-
-    g_showLive = GetPrivateProfileInt(L"Settings", L"ShowLiveTrail", 0, path);
-    g_showResult = GetPrivateProfileInt(L"Settings", L"ShowResultTrail", 1, path);
     g_autoSave = GetPrivateProfileInt(L"Settings", L"AutoSave", 0, path);
-
-    g_tronAiCount = GetPrivateProfileInt(L"Settings", L"TronAICount", 3, path);
 }
 
 int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {

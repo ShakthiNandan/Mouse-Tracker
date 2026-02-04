@@ -1,6 +1,6 @@
 @echo off
 echo Attempting to build with MinGW (g++)...
-g++ -o MouseTracker.exe main.cpp -mwindows -O2 -s -lgdiplus
+g++ -o MouseTracker.exe main.cpp tron_game.cpp -mwindows -O2 -s -lgdiplus
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo ---------------------------------------
