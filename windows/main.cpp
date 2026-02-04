@@ -29,8 +29,13 @@ COLORREF g_penColor = RGB(0, 255, 0); // Green
 BOOL g_autoClear = TRUE; 
 int g_trailLength = 20;
 
+// Initial Interface States
+BOOL g_showLive = FALSE;
+BOOL g_showResult = TRUE;
+BOOL g_autoSave = FALSE;
+
 // UI Handles
-HWND hStartBtn, hStopBtn, hLiveCheck, hAutoSaveCheck;
+HWND hStartBtn, hStopBtn, hLiveCheck, hResultCheck, hAutoSaveCheck;
 HWND hLiveOverlay = NULL;
 
 // Forward declarations
@@ -83,7 +88,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine,
     HWND hwnd = CreateWindowEx(
         0, CONTROL_CLASS_NAME, title,
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 250, 160, 
+        CW_USEDEFAULT, CW_USEDEFAULT, 250, 220, 
         NULL, NULL, hInstance, NULL
     );
 
@@ -129,15 +134,27 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             hwnd, (HMENU)3,
             ((LPCREATESTRUCT)lParam)->hInstance, NULL
         );
+        if (g_showLive) SendMessage(hLiveCheck, BM_SETCHECK, BST_CHECKED, 0);
 
-        // Checkbox for Auto Save
-        hAutoSaveCheck = CreateWindow(
-            L"BUTTON", L"Auto-Save on Stop",
+        // Checkbox for Result Trail
+        hResultCheck = CreateWindow(
+            L"BUTTON", L"Show Result Trail",
             WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
             15, 110, 200, 30,
             hwnd, (HMENU)4,
             ((LPCREATESTRUCT)lParam)->hInstance, NULL
         );
+        if (g_showResult) SendMessage(hResultCheck, BM_SETCHECK, BST_CHECKED, 0);
+
+        // Checkbox for Auto Save
+        hAutoSaveCheck = CreateWindow(
+            L"BUTTON", L"Auto-Save on Stop",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+            15, 140, 200, 30,
+            hwnd, (HMENU)5,
+            ((LPCREATESTRUCT)lParam)->hInstance, NULL
+        );
+        if (g_autoSave) SendMessage(hAutoSaveCheck, BM_SETCHECK, BST_CHECKED, 0);
         break;
 
     case WM_COMMAND:
@@ -164,7 +181,9 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
                 SetTimer(hwnd, 1, g_interval, NULL); 
                 EnableWindow(hStartBtn, FALSE);
+                EnableWindow(hStartBtn, FALSE);
                 EnableWindow(hLiveCheck, FALSE); // Lock checkboxes
+                EnableWindow(hResultCheck, FALSE);
                 EnableWindow(hAutoSaveCheck, FALSE);
                 EnableWindow(hStopBtn, TRUE);
             } else {
@@ -185,7 +204,9 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 logFile = NULL;
             }
             EnableWindow(hStartBtn, TRUE);
+            EnableWindow(hStartBtn, TRUE);
             EnableWindow(hLiveCheck, TRUE);
+            EnableWindow(hResultCheck, TRUE);
             EnableWindow(hAutoSaveCheck, TRUE);
             EnableWindow(hStopBtn, FALSE);
 
@@ -220,16 +241,17 @@ LRESULT CALLBACK ControlProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
 
             if (!g_trailPoints.empty()) {
-                // Open Trail Window (Fullscreen)
-                HWND hTrail = CreateWindowEx(
-                    WS_EX_TOPMOST | WS_EX_LAYERED, TRAIL_CLASS_NAME, L"Mouse Trail",
-                    WS_POPUP | WS_VISIBLE | WS_MAXIMIZE,
-                    0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
-                    NULL, NULL, GetModuleHandle(NULL), NULL
-                );
-                // Make black transparent
-                SetLayeredWindowAttributes(hTrail, RGB(0,0,0), 0, LWA_COLORKEY);
-                ShowWindow(hTrail, SW_SHOWMAXIMIZED);
+                // If Result Checkbox is checked, show the window
+                if (SendMessage(hResultCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                    HWND hTrail = CreateWindowEx(
+                        WS_EX_TOPMOST | WS_EX_LAYERED, TRAIL_CLASS_NAME, L"Mouse Trail",
+                        WS_POPUP | WS_VISIBLE | WS_MAXIMIZE,
+                        0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+                        NULL, NULL, GetModuleHandle(NULL), NULL
+                    );
+                    SetLayeredWindowAttributes(hTrail, RGB(0,0,0), 0, LWA_COLORKEY);
+                    ShowWindow(hTrail, SW_SHOWMAXIMIZED);
+                }
             } else {
                 MessageBox(hwnd, L"No points to draw.", L"Info", MB_OK);
             }
@@ -380,6 +402,11 @@ void LoadSettings() {
     g_penColor = RGB(r, g, b);
     g_autoClear = GetPrivateProfileInt(L"Settings", L"AutoClear", 1, path);
     g_trailLength = GetPrivateProfileInt(L"Settings", L"TrailLength", 20, path);
+
+    // Load UI States
+    g_showLive = GetPrivateProfileInt(L"Settings", L"ShowLiveTrail", 0, path);
+    g_showResult = GetPrivateProfileInt(L"Settings", L"ShowResultTrail", 1, path);
+    g_autoSave = GetPrivateProfileInt(L"Settings", L"AutoSave", 0, path);
 }
 
 int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
